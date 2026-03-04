@@ -2,21 +2,21 @@ import express from 'express';
 import { body, validationResult } from 'express-validator';
 import { Product, InventoryLog } from '../models/index.js';
 import { authenticate } from '../middleware/auth.js';
-import upload from '../middleware/upload.js';
+import upload, { uploadToCloudinary } from '../middleware/uploadCloudinary.js';
 
 const router = express.Router();
 
 // Get all products with search, filter, sort
 router.get('/', authenticate, async (req, res) => {
   try {
-    const { 
-      search, 
-      category, 
-      minPrice, 
-      maxPrice, 
-      lowStock, 
-      expiringSoon, 
-      sortBy = 'createdAt', 
+    const {
+      search,
+      category,
+      minPrice,
+      maxPrice,
+      lowStock,
+      expiringSoon,
+      sortBy = 'createdAt',
       sortOrder = 'desc',
       page = 1,
       limit = 20
@@ -35,7 +35,7 @@ router.get('/', authenticate, async (req, res) => {
     if (category) query.category = category;
     if (minPrice) query.price = { $gte: Number(minPrice) };
     if (maxPrice) query.price = { ...query.price, $lte: Number(maxPrice) };
-    
+
     if (lowStock === 'true') {
       query.$expr = { $lte: ['$stock', '$lowStockThreshold'] };
     }
@@ -87,7 +87,8 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, upload.single('image'), [
   body('name').trim().notEmpty().withMessage('Name is required'),
   body('category').notEmpty().withMessage('Category is required'),
-  body('price').isFloat({ min: 0 }).withMessage('Valid price is required'),
+  body('costPrice').optional().isFloat({ min: 0 }).withMessage('Valid cost price is required'),
+  body('sellingPrice').optional().isFloat({ min: 0 }).withMessage('Valid selling price is required'),
   body('stock').isInt({ min: 0 }).withMessage('Valid stock quantity is required')
 ], async (req, res) => {
   try {
@@ -110,13 +111,13 @@ router.post('/', authenticate, upload.single('image'), [
     }
 
     if (req.file) {
-      productData.image = `/uploads/${req.file.filename}`;
+      const uploadResult = await uploadToCloudinary(req.file.buffer);
+      productData.image = uploadResult.secure_url;
     }
 
     const product = new Product(productData);
     await product.save();
 
-    // Log inventory entry
     const inventoryLog = new InventoryLog({
       product: product._id,
       type: 'in',
@@ -136,8 +137,19 @@ router.post('/', authenticate, upload.single('image'), [
 });
 
 // Update product
-router.put('/:id', authenticate, upload.single('image'), async (req, res) => {
+router.put('/:id', authenticate, upload.single('image'), [
+  body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
+  body('category').optional().notEmpty().withMessage('Category cannot be empty'),
+  body('costPrice').optional().isFloat({ min: 0 }).withMessage('Valid cost price is required'),
+  body('sellingPrice').optional().isFloat({ min: 0 }).withMessage('Valid selling price is required'),
+  body('stock').optional().isInt({ min: 0 }).withMessage('Valid stock quantity is required')
+], async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
@@ -156,7 +168,8 @@ router.put('/:id', authenticate, upload.single('image'), async (req, res) => {
     if (req.body.expiryDate) updateData.expiryDate = new Date(req.body.expiryDate);
 
     if (req.file) {
-      updateData.image = `/uploads/${req.file.filename}`;
+      const uploadResult = await uploadToCloudinary(req.file.buffer);
+      updateData.image = uploadResult.secure_url;
     }
 
     const updatedProduct = await Product.findByIdAndUpdate(
@@ -208,7 +221,6 @@ router.patch('/:id/stock', authenticate, async (req, res) => {
     product.stock = newStock;
     await product.save();
 
-    // Log inventory change
     const inventoryLog = new InventoryLog({
       product: product._id,
       type: quantity > 0 ? 'in' : 'out',

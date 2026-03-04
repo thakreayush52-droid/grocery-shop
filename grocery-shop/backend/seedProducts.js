@@ -285,11 +285,19 @@ async function seedProducts() {
     console.log(`Expected Profit: ₹${totalProfit.toLocaleString()}`);
     console.log(`Average Margin: ${(totalProfit / totalStockValue * 100).toFixed(2)}%`);
 
-    process.exit(0);
+    if (!process.env.AUTO_SEED) {
+      process.exit(0);
+    }
+    
+    return insertedProducts;
   } catch (error) {
     console.error('Error seeding products:', error);
-    process.exit(1);
+    if (!process.env.AUTO_SEED) {
+      process.exit(1);
+    }
+    throw error;
   }
 }
 
-seedProducts();
+// Export for use in server.js
+export { seedProducts as seedDatabase };
