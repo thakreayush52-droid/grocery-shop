@@ -6,7 +6,7 @@ import upload from '../middleware/upload.js';
 
 const router = express.Router();
 
-// Get all products with search, filter, sort
+// Get all products with search, filter, sort (SHARED PRODUCTS - ALL USERS CAN SEE)
 router.get('/', authenticate, async (req, res) => {
   try {
     const { 
@@ -22,7 +22,7 @@ router.get('/', authenticate, async (req, res) => {
       limit = 20
     } = req.query;
 
-    let query = { isActive: true };
+    let query = { isActive: true }; // No user filter - products are shared
 
     if (search) {
       query.$or = [
@@ -83,7 +83,7 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-// Create product
+// Create product (only admins can add new products)
 router.post('/', authenticate, upload.single('image'), [
   body('name').trim().notEmpty().withMessage('Name is required'),
   body('category').notEmpty().withMessage('Category is required'),
@@ -99,6 +99,7 @@ router.post('/', authenticate, upload.single('image'), [
 
     const productData = {
       ...req.body,
+      createdBy: req.user._id,
       costPrice: Number(req.body.costPrice) || Number(req.body.price),
       sellingPrice: Number(req.body.sellingPrice) || Number(req.body.price),
       price: Number(req.body.sellingPrice) || Number(req.body.price),
@@ -136,7 +137,7 @@ router.post('/', authenticate, upload.single('image'), [
   }
 });
 
-// Update product
+// Update product (only the creator can update)
 router.put('/:id', authenticate, upload.single('image'), [
   body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
   body('category').optional().notEmpty().withMessage('Category cannot be empty'),
@@ -153,6 +154,11 @@ router.put('/:id', authenticate, upload.single('image'), [
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
+    }
+
+    // Only allow creator to update, or admin role
+    if (product.createdBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     const updateData = { ...req.body };
@@ -174,7 +180,7 @@ router.put('/:id', authenticate, upload.single('image'), [
     const updatedProduct = await Product.findByIdAndUpdate(
       req.params.id,
       updateData,
-      { new: true }
+      { new: true, runValidators: true }
     );
 
     res.json(updatedProduct);
@@ -183,67 +189,23 @@ router.put('/:id', authenticate, upload.single('image'), [
   }
 });
 
-// Delete product (soft delete)
+// Delete product (soft delete - only creator or admin can delete)
 router.delete('/:id', authenticate, async (req, res) => {
   try {
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
-      { isActive: false },
-      { new: true }
-    );
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
-    res.json({ message: 'Product deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Update stock
-router.patch('/:id/stock', authenticate, async (req, res) => {
-  try {
-    const { quantity, reason, notes } = req.body;
     const product = await Product.findById(req.params.id);
-    
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    const previousStock = product.stock;
-    const newStock = previousStock + Number(quantity);
-
-    if (newStock < 0) {
-      return res.status(400).json({ message: 'Insufficient stock' });
+    // Only allow creator to delete, or admin role
+    if (product.createdBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
-    product.stock = newStock;
+    product.isActive = false;
     await product.save();
 
-    // Log inventory change
-    const inventoryLog = new InventoryLog({
-      product: product._id,
-      type: quantity > 0 ? 'in' : 'out',
-      quantity: Math.abs(quantity),
-      previousStock,
-      newStock,
-      reason: reason || 'manual_adjustment',
-      notes,
-      performedBy: req.user._id
-    });
-    await inventoryLog.save();
-
-    res.json(product);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get categories
-router.get('/categories/list', authenticate, async (req, res) => {
-  try {
-    const categories = await Product.distinct('category');
-    res.json(categories);
+    res.json({ message: 'Product deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

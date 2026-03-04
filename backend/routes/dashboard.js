@@ -5,39 +5,40 @@ import { getSalesPrediction, getRestockRecommendations } from '../utils/mlServic
 
 const router = express.Router();
 
-// Get dashboard stats
+// Get dashboard stats - SALES ARE USER-SPECIFIC, PRODUCTS ARE SHARED
 router.get('/stats', authenticate, async (req, res) => {
   try {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    // Total Revenue
+    // Total Revenue (user-specific sales)
     const totalRevenueAgg = await Sale.aggregate([
+      { $match: { soldBy: req.user._id } },
       { $group: { _id: null, total: { $sum: '$total' } } }
     ]);
     const totalRevenue = totalRevenueAgg[0]?.total || 0;
 
-    // Today's Sales
+    // Today's Sales (user-specific)
     const todaySalesAgg = await Sale.aggregate([
-      { $match: { createdAt: { $gte: today } } },
+      { $match: { createdAt: { $gte: today }, soldBy: req.user._id } },
       { $group: { _id: null, total: { $sum: '$total' }, count: { $sum: 1 } } }
     ]);
     const todaySales = todaySalesAgg[0]?.total || 0;
     const todayCount = todaySalesAgg[0]?.count || 0;
 
-    // Monthly Sales
+    // Monthly Sales (user-specific)
     const monthlySalesAgg = await Sale.aggregate([
-      { $match: { createdAt: { $gte: startOfMonth } } },
+      { $match: { createdAt: { $gte: startOfMonth }, soldBy: req.user._id } },
       { $group: { _id: null, total: { $sum: '$total' }, count: { $sum: 1 } } }
     ]);
     const monthlySales = monthlySalesAgg[0]?.total || 0;
     const monthlyCount = monthlySalesAgg[0]?.count || 0;
 
-    // Total Products
+    // Total Products (SHARED - all active products)
     const totalProducts = await Product.countDocuments({ isActive: true });
 
-    // Calculate total stock value and cost
+    // Calculate total stock value and cost (SHARED - all products)
     const stockValueAgg = await Product.aggregate([
       { $match: { isActive: true } },
       {
@@ -52,8 +53,9 @@ router.get('/stats', authenticate, async (req, res) => {
     const totalStockValue = stockValueAgg[0]?.totalValue || 0;
     const potentialProfit = totalStockValue - totalStockCost;
 
-    // Calculate actual profit from sales
+    // Calculate actual profit from user's sales (user-specific)
     const salesProfitAgg = await Sale.aggregate([
+      { $match: { soldBy: req.user._id } },
       { $unwind: '$items' },
       {
         $lookup: {
@@ -80,13 +82,13 @@ router.get('/stats', authenticate, async (req, res) => {
     const totalSalesCost = salesProfitAgg[0]?.totalCost || 0;
     const actualProfit = totalSalesRevenue - totalSalesCost;
 
-    // Low Stock Products
+    // Low Stock Products (SHARED - all products)
     const lowStockProducts = await Product.find({
       isActive: true,
       $expr: { $lte: ['$stock', '$lowStockThreshold'] }
     }).limit(10);
 
-    // Expiring Soon Products
+    // Expiring Soon Products (SHARED - all products)
     const sevenDaysFromNow = new Date();
     sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
     const expiringProducts = await Product.find({
@@ -94,8 +96,9 @@ router.get('/stats', authenticate, async (req, res) => {
       expiryDate: { $lte: sevenDaysFromNow, $gte: new Date() }
     }).limit(10);
 
-    // Best Selling Products
+    // Best Selling Products (based on user's sales only)
     const bestSellers = await Sale.aggregate([
+      { $match: { soldBy: req.user._id } },
       { $unwind: '$items' },
       {
         $group: {
@@ -117,8 +120,9 @@ router.get('/stats', authenticate, async (req, res) => {
       { $unwind: '$product' }
     ]);
 
-    // Sales by Category
+    // Sales by Category (user's sales only)
     const salesByCategory = await Sale.aggregate([
+      { $match: { soldBy: req.user._id } },
       { $unwind: '$items' },
       {
         $lookup: {
@@ -138,8 +142,8 @@ router.get('/stats', authenticate, async (req, res) => {
       }
     ]);
 
-    // Recent Sales
-    const recentSales = await Sale.find()
+    // Recent Sales (user's own sales)
+    const recentSales = await Sale.find({ soldBy: req.user._id })
       .populate('items.product', 'name')
       .populate('soldBy', 'name')
       .sort({ createdAt: -1 })
@@ -171,7 +175,7 @@ router.get('/stats', authenticate, async (req, res) => {
   }
 });
 
-// Get sales chart data
+// Get sales chart data - USER SPECIFIC
 router.get('/charts/sales', authenticate, async (req, res) => {
   try {
     const { period = '7days' } = req.query;
@@ -197,7 +201,7 @@ router.get('/charts/sales', authenticate, async (req, res) => {
     }
 
     const salesData = await Sale.aggregate([
-      { $match: { createdAt: { $gte: startDate } } },
+      { $match: { createdAt: { $gte: startDate }, soldBy: req.user._id } },
       {
         $group: {
           _id: groupBy,
@@ -214,15 +218,15 @@ router.get('/charts/sales', authenticate, async (req, res) => {
   }
 });
 
-// Get ML predictions
+// Get ML predictions - USER SPECIFIC
 router.get('/predictions', authenticate, async (req, res) => {
   try {
-    // Get historical sales data
+    // Get historical sales data (user-specific)
     const last30Days = new Date();
     last30Days.setDate(last30Days.getDate() - 30);
 
     const historicalData = await Sale.aggregate([
-      { $match: { createdAt: { $gte: last30Days } } },
+      { $match: { createdAt: { $gte: last30Days }, soldBy: req.user._id } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
@@ -237,7 +241,7 @@ router.get('/predictions', authenticate, async (req, res) => {
     const predictions7Days = await getSalesPrediction(historicalData, 7);
     const predictions30Days = await getSalesPrediction(historicalData, 30);
 
-    // Get inventory data for restock recommendations
+    // Get inventory data for restock recommendations (SHARED - all products)
     const inventoryData = await Product.find({ isActive: true })
       .select('name stock lowStockThreshold price category');
 

@@ -6,7 +6,7 @@ import { calculateTotals } from '../utils/currency.js';
 
 const router = express.Router();
 
-// Get all sales
+// Get all sales (USER SPECIFIC - each user sees only their own sales)
 router.get('/', authenticate, async (req, res) => {
   try {
     const { 
@@ -17,7 +17,7 @@ router.get('/', authenticate, async (req, res) => {
       limit = 20
     } = req.query;
 
-    let query = {};
+    let query = { soldBy: req.user._id };
 
     if (startDate || endDate) {
       query.createdAt = {};
@@ -57,24 +57,28 @@ router.get('/', authenticate, async (req, res) => {
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const sale = await Sale.findById(req.params.id)
-      .populate('items.product', 'name category price image')
+      .populate('items.product', 'name category price')
       .populate('soldBy', 'name');
     
     if (!sale) {
       return res.status(404).json({ message: 'Sale not found' });
     }
+
+    // Check ownership
+    if (sale.soldBy.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
     res.json(sale);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-// Create sale
+// Create sale - PRODUCTS ARE SHARED, SALE BELONGS TO USER
 router.post('/', authenticate, [
-  body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
-  body('items.*.product').notEmpty().withMessage('Product ID is required'),
-  body('items.*.quantity').isInt({ min: 1 }).withMessage('Valid quantity is required'),
-  body('paymentMode').isIn(['Cash', 'UPI', 'Card', 'Other']).withMessage('Valid payment mode is required')
+  body('items').isArray().withMessage('Items must be an array'),
+  body('paymentMode').isIn(['Cash', 'UPI', 'Card', 'Other']).withMessage('Invalid payment mode')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -91,6 +95,7 @@ router.post('/', authenticate, [
       if (!product) {
         return res.status(404).json({ message: `Product not found: ${item.product}` });
       }
+
       if (product.stock < item.quantity) {
         return res.status(400).json({ 
           message: `Insufficient stock for ${product.name}. Available: ${product.stock}` 
@@ -109,7 +114,7 @@ router.post('/', authenticate, [
     // Calculate totals
     const { subtotal, gstAmount, total } = calculateTotals(saleItems, gstRate);
 
-    // Create sale
+    // Create sale (belongs to current user)
     const sale = new Sale({
       items: saleItems,
       subtotal,
@@ -144,95 +149,7 @@ router.post('/', authenticate, [
       await inventoryLog.save();
     }
 
-    await sale.populate('items.product', 'name category');
-    await sale.populate('soldBy', 'name');
-
     res.status(201).json(sale);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get sales summary for dashboard
-router.get('/summary/daily', authenticate, async (req, res) => {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const dailySales = await Sale.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: today, $lt: tomorrow }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          totalSales: { $sum: '$total' },
-          count: { $sum: 1 }
-        }
-      }
-    ]);
-
-    res.json({
-      date: today,
-      totalSales: dailySales[0]?.totalSales || 0,
-      count: dailySales[0]?.count || 0
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get monthly sales
-router.get('/summary/monthly', authenticate, async (req, res) => {
-  try {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-
-    const monthlySales = await Sale.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: startOfMonth, $lte: endOfMonth }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          totalSales: { $sum: '$total' },
-          count: { $sum: 1 }
-        }
-      }
-    ]);
-
-    res.json({
-      month: now.getMonth() + 1,
-      year: now.getFullYear(),
-      totalSales: monthlySales[0]?.totalSales || 0,
-      count: monthlySales[0]?.count || 0
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Get sales by payment mode
-router.get('/summary/payment-modes', authenticate, async (req, res) => {
-  try {
-    const paymentModeStats = await Sale.aggregate([
-      {
-        $group: {
-          _id: '$paymentMode',
-          total: { $sum: '$total' },
-          count: { $sum: 1 }
-        }
-      }
-    ]);
-
-    res.json(paymentModeStats);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
