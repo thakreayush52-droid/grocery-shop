@@ -1,1 +1,23 @@
 node_modules/
+
+# Environment variables
+.env
+backend/.env
+frontend/.env
+ml-service/.env
+
+# Uploads
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Build outputs
+dist/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
