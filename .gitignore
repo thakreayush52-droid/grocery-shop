@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Dependencies
 node_modules/
 npm-debug.log*
@@ -12,10 +13,24 @@ yarn.lock
 .env.development.local
 .env.test.local
 .env.production.local
+=======
+node_modules/
+
+# Environment variables
+.env
+backend/.env
+frontend/.env
+ml-service/.env
+
+# Uploads
+backend/uploads/*
+!backend/uploads/.gitkeep
+>>>>>>> 8bc6920cfa7b30f05c6c5c9223b738d4a01a209d
 
 # Build outputs
 dist/
 build/
+<<<<<<< HEAD
 .next/
 out/
 
@@ -72,3 +87,13 @@ data/
 *.pem
 *.key
 certs/
+=======
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+>>>>>>> 8bc6920cfa7b30f05c6c5c9223b738d4a01a209d
